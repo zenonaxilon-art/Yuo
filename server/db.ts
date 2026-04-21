@@ -65,6 +65,21 @@ db.exec(`
     value INTEGER NOT NULL, -- 1 or -1
     UNIQUE(user_id, target_id, target_type)
   );
+
+  CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    actor_id INTEGER NOT NULL,
+    type TEXT NOT NULL, -- 'post_reply', 'comment_reply', 'mention'
+    post_id INTEGER NOT NULL,
+    comment_id INTEGER,
+    is_read INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users (id),
+    FOREIGN KEY (actor_id) REFERENCES users (id),
+    FOREIGN KEY (post_id) REFERENCES posts (id),
+    FOREIGN KEY (comment_id) REFERENCES comments (id)
+  );
 `);
 
 // Seed Admin User

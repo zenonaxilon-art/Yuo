@@ -7,8 +7,8 @@ import CreatePost from './pages/CreatePost';
 import AdminDashboard from './pages/AdminDashboard';
 import Login from './pages/Login';
 import Register from './pages/Register';
-import { LogOut, Plus, Shield, User, Moon, Sun, Home as HomeIcon } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { LogOut, Plus, Shield, User, Moon, Sun, Home as HomeIcon, Bell } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
 
 function Navigation() {
   const { user, logout } = useAuth();
@@ -72,7 +72,56 @@ function Navigation() {
 }
 
 function Header() {
-  const { user } = useAuth();
+  const { user, token } = useAuth();
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (user && token) {
+      fetch('/api/notifications', {
+        headers: { Authorization: `Bearer \${token}` }
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.notifications) {
+          setNotifications(data.notifications);
+          setUnreadCount(data.notifications.filter((n: any) => n.is_read === 0).length);
+        }
+      });
+    }
+  }, [user, token]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setShowNotifications(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const handleOpenNotifications = () => {
+    setShowNotifications(!showNotifications);
+    if (!showNotifications && unreadCount > 0) {
+      fetch('/api/notifications/read', {
+        method: 'POST',
+        headers: { Authorization: `Bearer \${token}` }
+      });
+      setUnreadCount(0);
+      setNotifications(prev => prev.map(n => ({...n, is_read: 1})));
+    }
+  };
+
+  const getNotificationText = (n: any) => {
+    if (n.type === 'post_reply') return `\${n.actor_username} replied to your post`;
+    if (n.type === 'comment_reply') return `\${n.actor_username} replied to your comment`;
+    if (n.type === 'mention') return `\${n.actor_username} mentioned you`;
+    return `New activity from \${n.actor_username}`;
+  };
   
   return (
     <header className="h-16 border-b border-[#1f1f1f] bg-[#0a0a0a] flex items-center justify-between px-8 z-10 flex-shrink-0">
@@ -87,19 +136,56 @@ function Header() {
       
       <div className="flex items-center gap-6 ml-4">
         {user ? (
-          <div className="flex items-center gap-3 pl-6 border-l border-[#1f1f1f] h-8">
-            <div className="text-right">
-              <div className="flex items-center justify-end gap-1 font-semibold text-sm">
-                {user.username}
-                {user.verified === 1 && (
-                  <svg className="w-3 h-3 text-blue-400" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M6.267 3.455a3.066 3.066 0 001.745-.723 3.066 3.066 0 013.976 0 3.066 3.066 0 001.745.723 3.066 3.066 0 012.812 2.812c.051.643.304 1.254.723 1.745a3.066 3.066 0 010 3.976 3.066 3.066 0 00-.723 1.745 3.066 3.066 0 01-2.812 2.812 3.066 3.066 0 00-1.745.723 3.066 3.066 0 01-3.976 0 3.066 3.066 0 00-1.745-.723 3.066 3.066 0 01-2.812-2.812 3.066 3.066 0 00-.723-1.745 3.066 3.066 0 010-3.976 3.066 3.066 0 00.723-1.745 3.066 3.066 0 012.812-2.812zm7.44 5.252a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd"/></svg>
+          <div className="flex items-center gap-4">
+            <div className="relative" ref={dropdownRef}>
+              <button 
+                onClick={handleOpenNotifications}
+                className="p-2 text-[#a1a1a1] hover:text-white transition-colors relative"
+              >
+                <Bell size={20} />
+                {unreadCount > 0 && (
+                  <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-[#0a0a0a]"></span>
                 )}
-              </div>
-              <div className="text-[10px] text-blue-500 font-bold uppercase tracking-tighter">
-                {user.role === 'admin' ? 'Administrator' : 'User'}
-              </div>
+              </button>
+              
+              {showNotifications && (
+                <div className="absolute right-0 mt-2 w-80 bg-[#141414] border border-[#1f1f1f] rounded-xl shadow-2xl py-2 z-50 max-h-96 overflow-y-auto">
+                  <h3 className="px-4 py-2 text-xs font-bold text-[#555] uppercase tracking-widest border-b border-[#1f1f1f]">Notifications</h3>
+                  {notifications.length === 0 ? (
+                    <div className="px-4 py-8 text-center text-sm text-[#555]">No notifications yet</div>
+                  ) : (
+                    <div className="flex flex-col">
+                      {notifications.map(n => (
+                        <Link 
+                          key={n.id} 
+                          to={`/post/\${n.post_id}`} 
+                          onClick={() => setShowNotifications(false)}
+                          className={`px-4 py-3 hover:bg-[#1a1a1a] transition-colors border-b border-[#1f1f1f] last:border-0 block \${n.is_read === 0 ? 'bg-[#1a1a1a]/50' : ''}`}
+                        >
+                          <div className="text-sm text-[#e5e5e5]">{getNotificationText(n)}</div>
+                          <div className="text-xs text-[#a1a1a1] mt-1 pr-1 truncate font-medium">"{n.post_title}"</div>
+                        </Link>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
-            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-700 border-2 border-[#1f1f1f]"></div>
+
+            <div className="flex items-center gap-3 pl-6 border-l border-[#1f1f1f] h-8">
+              <div className="text-right">
+                <div className="flex items-center justify-end gap-1 font-semibold text-sm">
+                  {user.username}
+                  {user.verified === 1 && (
+                    <svg className="w-3 h-3 text-blue-400" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M6.267 3.455a3.066 3.066 0 001.745-.723 3.066 3.066 0 013.976 0 3.066 3.066 0 001.745.723 3.066 3.066 0 012.812 2.812c.051.643.304 1.254.723 1.745a3.066 3.066 0 010 3.976 3.066 3.066 0 00-.723 1.745 3.066 3.066 0 01-2.812 2.812 3.066 3.066 0 00-1.745.723 3.066 3.066 0 01-3.976 0 3.066 3.066 0 00-1.745-.723 3.066 3.066 0 01-2.812-2.812 3.066 3.066 0 00-.723-1.745 3.066 3.066 0 010-3.976 3.066 3.066 0 00.723-1.745 3.066 3.066 0 012.812-2.812zm7.44 5.252a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd"/></svg>
+                  )}
+                </div>
+                <div className="text-[10px] text-blue-500 font-bold uppercase tracking-tighter">
+                  {user.role === 'admin' ? 'Administrator' : 'User'}
+                </div>
+              </div>
+              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-700 border-2 border-[#1f1f1f]"></div>
+            </div>
           </div>
         ) : (
           <div className="text-sm font-medium text-[#a1a1a1]">Anonymous Viewer</div>

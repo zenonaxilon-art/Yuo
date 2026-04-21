@@ -102,8 +102,29 @@ router.post("/posts", authenticate, (req: any, res) => {
   const { title, content, tagId } = req.body;
   if (!title) return res.status(400).json({ error: "Title is required" });
 
-  const result = db.prepare("INSERT INTO posts (author_id, title, content, tag_id) VALUES (?, ?, ?, ?)").run(req.user.id, title, content || null, tagId || null);
-  res.json({ id: result.lastInsertRowid });
+  db.transaction(() => {
+    const result = db.prepare("INSERT INTO posts (author_id, title, content, tag_id) VALUES (?, ?, ?, ?)").run(req.user.id, title, content || null, tagId || null);
+    const postId = result.lastInsertRowid;
+
+    if (content) {
+      const mentionRegex = /@([a-zA-Z0-9_]+)/g;
+      let match;
+      const mentionedUsers = new Set<string>();
+      while ((match = mentionRegex.exec(content)) !== null) {
+        mentionedUsers.add(match[1]);
+      }
+
+      mentionedUsers.forEach(username => {
+        const user = db.prepare("SELECT id FROM users WHERE username = ? COLLATE NOCASE").get(username) as any;
+        if (user && user.id !== req.user.id) {
+          db.prepare("INSERT INTO notifications (user_id, actor_id, type, post_id) VALUES (?, ?, 'mention', ?)")
+            .run(user.id, req.user.id, postId);
+        }
+      });
+    }
+
+    res.json({ id: postId });
+  })();
 });
 
 router.get("/posts/:id", (req, res) => {
@@ -134,9 +155,52 @@ router.get("/posts/:id/comments", (req, res) => {
 router.post("/posts/:id/comments", authenticate, (req: any, res) => {
   const { content, parentId } = req.body;
   if (!content) return res.status(400).json({ error: "Content required" });
+  const postId = req.params.id;
+  const authorId = req.user.id;
 
-  const result = db.prepare("INSERT INTO comments (post_id, author_id, parent_id, content) VALUES (?, ?, ?, ?)").run(req.params.id, req.user.id, parentId || null, content);
-  res.json({ id: result.lastInsertRowid });
+  db.transaction(() => {
+    const result = db.prepare("INSERT INTO comments (post_id, author_id, parent_id, content) VALUES (?, ?, ?, ?)").run(postId, authorId, parentId || null, content);
+    const commentId = result.lastInsertRowid;
+
+    // Determine who gets notified for the reply
+    if (parentId) {
+      // Reply to a comment
+      const parentComment = db.prepare("SELECT author_id FROM comments WHERE id = ?").get(parentId) as any;
+      if (parentComment && parentComment.author_id !== authorId) {
+        db.prepare("INSERT INTO notifications (user_id, actor_id, type, post_id, comment_id) VALUES (?, ?, 'comment_reply', ?, ?)")
+          .run(parentComment.author_id, authorId, postId, commentId);
+      }
+    } else {
+      // Reply to the post
+      const post = db.prepare("SELECT author_id FROM posts WHERE id = ?").get(postId) as any;
+      if (post && post.author_id !== authorId) {
+        db.prepare("INSERT INTO notifications (user_id, actor_id, type, post_id, comment_id) VALUES (?, ?, 'post_reply', ?, ?)")
+          .run(post.author_id, authorId, postId, commentId);
+      }
+    }
+
+    // Mentions parsing
+    const mentionRegex = /@([a-zA-Z0-9_]+)/g;
+    let match;
+    const mentionedUsers = new Set<string>();
+    while ((match = mentionRegex.exec(content)) !== null) {
+      mentionedUsers.add(match[1]);
+    }
+
+    mentionedUsers.forEach(username => {
+      const user = db.prepare("SELECT id FROM users WHERE username = ? COLLATE NOCASE").get(username) as any;
+      // Only notify if user exists and is not the author
+      if (user && user.id !== authorId) {
+        // Prevent double notification if they were already notified as the parent post/comment author
+        // Actually, we could just send them a mention notification anyway, or check to prevent duplicates.
+        // Let's keep it simple and just insert.
+        db.prepare("INSERT INTO notifications (user_id, actor_id, type, post_id, comment_id) VALUES (?, ?, 'mention', ?, ?)")
+          .run(user.id, authorId, postId, commentId);
+      }
+    });
+
+    res.json({ id: commentId });
+  })();
 });
 
 /* --- VOTING ROUTES --- */
@@ -235,6 +299,25 @@ router.delete("/admin/posts/:id", authenticate, requireAdmin, (req, res) => {
 router.delete("/admin/comments/:id", authenticate, requireAdmin, (req, res) => {
   db.prepare("DELETE FROM comments WHERE id = ?").run(req.params.id);
   res.json({ message: "Comment deleted" });
+});
+
+/* --- NOTIFICATIONS ROUTES --- */
+router.get("/notifications", authenticate, (req: any, res) => {
+  const notifications = db.prepare(`
+    SELECT n.*, u.username as actor_username, p.title as post_title 
+    FROM notifications n
+    JOIN users u ON n.actor_id = u.id
+    JOIN posts p ON n.post_id = p.id
+    WHERE n.user_id = ?
+    ORDER BY n.created_at DESC
+    LIMIT 50
+  `).all(req.user.id);
+  res.json({ notifications });
+});
+
+router.post("/notifications/read", authenticate, (req: any, res) => {
+  db.prepare("UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0").run(req.user.id);
+  res.json({ message: "Notifications marked as read" });
 });
 
 export default router;
