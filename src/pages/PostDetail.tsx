@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
-import { ArrowUp, ArrowDown, ShieldCheck, MessageSquare } from 'lucide-react';
+import { ArrowUp, ArrowDown, ShieldCheck, MessageSquare, Edit2, Check, X } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 
 export default function PostDetail() {
@@ -10,12 +10,22 @@ export default function PostDetail() {
   const [comments, setComments] = useState<any[]>([]);
   const [newComment, setNewComment] = useState('');
   const [replyTo, setReplyTo] = useState<number | null>(null);
+  
+  // Edit state
+  const [isEditing, setIsEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState('');
+  const [editContent, setEditContent] = useState('');
+
   const { token, user } = useAuth();
 
   const fetchPost = () => {
     fetch(`/api/posts/\${id}`)
       .then(res => res.json())
-      .then(data => setPost(data.post));
+      .then(data => {
+        setPost(data.post);
+        setEditTitle(data.post?.title || '');
+        setEditContent(data.post?.content || '');
+      });
   };
 
   const fetchComments = () => {
@@ -60,6 +70,27 @@ export default function PostDetail() {
     setNewComment('');
     setReplyTo(null);
     fetchComments();
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editTitle.trim()) return;
+    
+    const res = await fetch(`/api/posts/\${id}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer \${token}`
+      },
+      body: JSON.stringify({ title: editTitle, content: editContent })
+    });
+
+    if (res.ok) {
+      setIsEditing(false);
+      fetchPost();
+    } else {
+      const data = await res.json();
+      alert(data.error || "Failed to update post");
+    }
   };
 
   if (!post) return <div className="p-8 text-center text-gray-500">Loading...</div>;
@@ -145,13 +176,51 @@ export default function PostDetail() {
             {post.verified === 1 && <ShieldCheck size={12} className="text-blue-500" />}
             <span>•</span>
             <span>{formatDistanceToNow(new Date(post.created_at))} ago</span>
+            
+            {user && user.username === post.username && !isEditing && (
+              <>
+                <span>•</span>
+                <button onClick={() => setIsEditing(true)} className="flex items-center gap-1 text-[#a1a1a1] hover:text-white transition-colors">
+                  <Edit2 size={12} /> Edit
+                </button>
+              </>
+            )}
           </div>
           
-          <h1 className="text-xl sm:text-2xl font-bold text-white mb-4 leading-tight">{post.title}</h1>
-          {post.content && (
-            <div className="text-sm text-[#e5e5e5] whitespace-pre-wrap leading-relaxed">
-              {post.content}
+          {isEditing ? (
+            <div className="space-y-4">
+              <input 
+                type="text" 
+                value={editTitle} 
+                onChange={(e) => setEditTitle(e.target.value)}
+                className="w-full bg-[#0f0f0f] border border-[#1f1f1f] text-white px-4 py-2 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 text-xl font-bold"
+                placeholder="Post Title..."
+              />
+              <textarea 
+                value={editContent} 
+                onChange={(e) => setEditContent(e.target.value)}
+                rows={6}
+                className="w-full bg-[#0f0f0f] border border-[#1f1f1f] text-[#e5e5e5] px-4 py-3 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 text-sm resize-y"
+                placeholder="Content (optional)..."
+              />
+              <div className="flex justify-end gap-2">
+                <button onClick={() => { setIsEditing(false); setEditTitle(post.title); setEditContent(post.content || ''); }} className="flex items-center gap-1 px-4 py-2 text-sm text-[#a1a1a1] hover:bg-[#1a1a1a] rounded-full transition-colors border border-[#1f1f1f]">
+                  <X size={16} /> Cancel
+                </button>
+                <button onClick={handleSaveEdit} className="flex items-center gap-1 px-4 py-2 text-sm bg-blue-600 text-white rounded-full hover:bg-blue-700 transition-colors border border-transparent">
+                  <Check size={16} /> Save Changes
+                </button>
+              </div>
             </div>
+          ) : (
+            <>
+              <h1 className="text-xl sm:text-2xl font-bold text-white mb-4 leading-tight">{post.title}</h1>
+              {post.content && (
+                <div className="text-sm text-[#e5e5e5] whitespace-pre-wrap leading-relaxed">
+                  {post.content}
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>

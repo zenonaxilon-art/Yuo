@@ -139,6 +139,18 @@ router.get("/posts/:id", (req, res) => {
   res.json({ post });
 });
 
+router.put("/posts/:id", authenticate, (req: any, res) => {
+  const { title, content } = req.body;
+  if (!title) return res.status(400).json({ error: "Title is required" });
+
+  const post = db.prepare("SELECT author_id FROM posts WHERE id = ?").get(req.params.id) as any;
+  if (!post) return res.status(404).json({ error: "Not found" });
+  if (post.author_id !== req.user.id) return res.status(403).json({ error: "Forbidden: Not your post" });
+
+  db.prepare("UPDATE posts SET title = ?, content = ? WHERE id = ?").run(title, content || null, req.params.id);
+  res.json({ message: "Post updated successfully" });
+});
+
 /* --- COMMENTS ROUTES --- */
 
 router.get("/posts/:id/comments", (req, res) => {

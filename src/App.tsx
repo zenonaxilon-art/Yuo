@@ -9,6 +9,7 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import { LogOut, Plus, Shield, User, Moon, Sun, Home as HomeIcon, Bell } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 
 function Navigation() {
   const { user, logout } = useAuth();
@@ -138,18 +139,28 @@ function Header() {
         {user ? (
           <div className="flex items-center gap-4">
             <div className="relative" ref={dropdownRef}>
-              <button 
+              <motion.button 
                 onClick={handleOpenNotifications}
                 className="p-2 text-[#a1a1a1] hover:text-white transition-colors relative"
+                animate={unreadCount > 0 ? { rotate: [0, -10, 10, -10, 10, 0] } : {}}
+                transition={{ duration: 0.5, repeat: Infinity, repeatDelay: 3 }}
+                key={unreadCount > 0 ? 'ringing' : 'silent'}
               >
                 <Bell size={20} />
                 {unreadCount > 0 && (
                   <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-[#0a0a0a]"></span>
                 )}
-              </button>
+              </motion.button>
               
+              <AnimatePresence>
               {showNotifications && (
-                <div className="absolute right-0 mt-2 w-80 bg-[#141414] border border-[#1f1f1f] rounded-xl shadow-2xl py-2 z-50 max-h-96 overflow-y-auto">
+                <motion.div 
+                  initial={{ opacity: 0, y: -10, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -10, scale: 0.95 }}
+                  transition={{ duration: 0.15 }}
+                  className="absolute right-0 mt-2 w-80 bg-[#141414] border border-[#1f1f1f] rounded-xl shadow-2xl py-2 z-50 max-h-96 overflow-y-auto"
+                >
                   <h3 className="px-4 py-2 text-xs font-bold text-[#555] uppercase tracking-widest border-b border-[#1f1f1f]">Notifications</h3>
                   {notifications.length === 0 ? (
                     <div className="px-4 py-8 text-center text-sm text-[#555]">No notifications yet</div>
@@ -168,8 +179,9 @@ function Header() {
                       ))}
                     </div>
                   )}
-                </div>
+                </motion.div>
               )}
+              </AnimatePresence>
             </div>
 
             <div className="flex items-center gap-3 pl-6 border-l border-[#1f1f1f] h-8">
