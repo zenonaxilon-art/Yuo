@@ -4,9 +4,10 @@ import path from "path";
 import fs from "fs";
 
 // Ensure data directory exists
-const dataDir = path.join(process.cwd(), "data");
+const isProd = process.env.NODE_ENV === "production";
+const dataDir = isProd ? "/tmp/data" : path.join(process.cwd(), "data");
 if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir);
+  fs.mkdirSync(dataDir, { recursive: true });
 }
 
 const dbPath = path.join(dataDir, "app.db");

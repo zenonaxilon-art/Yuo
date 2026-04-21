@@ -28,13 +28,15 @@ export default function AdminDashboard() {
     .then(res => res.json())
     .then(data => {
       if (data.users) setUsers(data.users);
-    });
+    })
+    .catch(err => console.error("Failed to fetch users", err));
   };
 
   const fetchTags = () => {
     fetch('/api/tags')
       .then(res => res.json())
-      .then(data => setTags(data.tags));
+      .then(data => setTags(data.tags || []))
+      .catch(err => console.error("Failed to fetch tags", err));
   };
 
   const handleToggleVerify = async (userId: number, currentStatus: number) => {

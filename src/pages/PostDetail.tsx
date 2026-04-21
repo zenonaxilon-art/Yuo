@@ -22,16 +22,21 @@ export default function PostDetail() {
     fetch(`/api/posts/\${id}`)
       .then(res => res.json())
       .then(data => {
+        if (!data.post) return;
         setPost(data.post);
-        setEditTitle(data.post?.title || '');
-        setEditContent(data.post?.content || '');
+        setEditTitle(data.post.title || '');
+        setEditContent(data.post.content || '');
+      })
+      .catch(err => {
+         console.error("Failed to fetch post:", err);
       });
   };
 
   const fetchComments = () => {
     fetch(`/api/posts/\${id}/comments`)
       .then(res => res.json())
-      .then(data => setComments(data.comments));
+      .then(data => setComments(data.comments || []))
+      .catch(err => console.error("Failed to fetch comments", err));
   };
 
   useEffect(() => {

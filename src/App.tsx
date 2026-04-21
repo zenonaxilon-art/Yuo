@@ -87,9 +87,12 @@ function Header() {
       .then(res => res.json())
       .then(data => {
         if (data.notifications) {
-          setNotifications(data.notifications);
-          setUnreadCount(data.notifications.filter((n: any) => n.is_read === 0).length);
+          setNotifications(data.notifications || []);
+          setUnreadCount((data.notifications || []).filter((n: any) => n.is_read === 0).length);
         }
+      })
+      .catch(err => {
+        console.error("Failed to fetch notifications:", err);
       });
     }
   }, [user, token]);

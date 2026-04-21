@@ -15,7 +15,11 @@ export default function Home() {
     if (tag) url += `&tag=\${tag}`;
     fetch(url)
       .then(res => res.json())
-      .then(data => setPosts(data.posts));
+      .then(data => setPosts(data.posts || []))
+      .catch(err => {
+        console.error("Failed to fetch posts:", err);
+        setPosts([]);
+      });
   };
 
   useEffect(() => {
