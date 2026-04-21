@@ -1,95 +1,95 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { ShieldCheck, User as UserIcon, Calendar, Check, X, Tag } from 'lucide-react';
+import { ShieldCheck, User as UserIcon, Tag } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
+import { db } from '../firebase';
+import { collection, query, orderBy, getDocs, doc, updateDoc, addDoc } from 'firebase/firestore';
 
 export default function AdminDashboard() {
-  const { user, token } = useAuth();
+  const { user, firebaseUser } = useAuth();
   const navigate = useNavigate();
   const [users, setUsers] = useState<any[]>([]);
   const [newTag, setNewTag] = useState('');
   const [tags, setTags] = useState<any[]>([]);
 
   useEffect(() => {
-    if (!token || user?.role !== 'admin') {
+    if (!firebaseUser || user?.role !== 'admin') {
       navigate('/');
       return;
     }
     
     fetchUsers();
     fetchTags();
-  }, [user, token, navigate]);
+  }, [user, firebaseUser, navigate]);
 
-  const fetchUsers = () => {
-    fetch('/api/admin/users', {
-      headers: { Authorization: `Bearer \${token}` }
-    })
-    .then(res => res.json())
-    .then(data => {
-      if (data.users) setUsers(data.users);
-    })
-    .catch(err => console.error("Failed to fetch users", err));
+  const fetchUsers = async () => {
+    try {
+      const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
+      const qSnap = await getDocs(q);
+      setUsers(qSnap.docs.map(d => ({id: d.id, ...d.data()})));
+    } catch (err) {
+      // index fallback
+      try {
+         const sf = await getDocs(collection(db, 'users'));
+         const u = sf.docs.map(d => ({id: d.id, ...d.data()})) as any[];
+         u.sort((a,b) => b.createdAt - a.createdAt);
+         setUsers(u);
+      } catch (e) {
+          console.error("Failed to fetch users", err);
+      }
+    }
   };
 
-  const fetchTags = () => {
-    fetch('/api/tags')
-      .then(res => res.json())
-      .then(data => setTags(data.tags || []))
-      .catch(err => console.error("Failed to fetch tags", err));
+  const fetchTags = async () => {
+    try {
+      const q = query(collection(db, 'tags'), orderBy('createdAt', 'desc'));
+      const qSnap = await getDocs(q);
+      setTags(qSnap.docs.map(d => ({id: d.id, ...d.data()})));
+    } catch (err) {
+      // index fallback
+       try {
+         const sf = await getDocs(collection(db, 'tags'));
+         const t = sf.docs.map(d => ({id: d.id, ...d.data()})) as any[];
+         t.sort((a,b) => b.createdAt - a.createdAt);
+         setTags(t);
+      } catch (e) {
+          console.error("Failed to fetch tags", err);
+      }
+    }
   };
 
-  const handleToggleVerify = async (userId: number, currentStatus: number) => {
-    await fetch(`/api/admin/users/\${userId}/verify`, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        Authorization: `Bearer \${token}`
-      },
-      body: JSON.stringify({ verified: !currentStatus })
-    });
-    fetchUsers();
+  const handleToggleVerify = async (userId: string, currentStatus: boolean) => {
+    try {
+      await updateDoc(doc(db, 'users', userId), { verified: !currentStatus });
+      fetchUsers();
+    } catch(e) {
+      alert("Failed to toggle verify");
+    }
   };
 
-  const handleBanUser = async (userId: number) => {
+  const handleBanUser = async (userId: string) => {
     if (!window.confirm("Are you sure you want to ban this user?")) return;
-    await fetch(`/api/admin/users/\${userId}/ban`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer \${token}` }
-    });
-    fetchUsers();
-  };
-
-  const handleResetPassword = async (userId: number) => {
-    const newPassword = window.prompt("Enter new password for this user:");
-    if (!newPassword) return;
-    const res = await fetch(`/api/admin/users/\${userId}/reset-password`, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        Authorization: `Bearer \${token}`
-      },
-      body: JSON.stringify({ newPassword })
-    });
-    if (res.ok) alert("Password reset successfully");
+    try {
+      await updateDoc(doc(db, 'users', userId), { role: 'banned' });
+      fetchUsers();
+    } catch(e) {
+      alert("Failed to ban");
+    }
   };
 
   const handleCreateTag = async (e: React.FormEvent) => {
     e.preventDefault();
-    const res = await fetch('/api/tags', {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        Authorization: `Bearer \${token}`
-      },
-      body: JSON.stringify({ name: newTag })
-    });
-    if (res.ok) {
+    try {
+      await addDoc(collection(db, 'tags'), {
+        name: newTag.toLowerCase(),
+        createdAt: Date.now()
+      });
       setNewTag('');
       fetchTags();
-    } else {
-      const data = await res.json();
-      alert(data.error);
+    } catch (err) {
+      console.error(err);
+      alert("Failed to create tag (it might already exist or permission denied)");
     }
   };
 
@@ -130,7 +130,7 @@ export default function AdminDashboard() {
                       <div className="ml-4">
                         <div className="text-sm font-medium text-white flex items-center gap-1">
                           {u.username}
-                          {u.verified === 1 && <ShieldCheck size={14} className="text-blue-500" />}
+                          {u.verified && <ShieldCheck size={14} className="text-blue-500" />}
                         </div>
                       </div>
                     </div>
@@ -144,23 +144,20 @@ export default function AdminDashboard() {
                     {u.karma}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-[#a1a1a1]">
-                    {formatDistanceToNow(new Date(u.created_at))} ago
+                    {u.createdAt ? formatDistanceToNow(new Date(u.createdAt)) : 'Recently'} ago
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium flex gap-2 items-center">
                     <button 
                       onClick={() => handleToggleVerify(u.id, u.verified)}
-                      className={`text-xs px-3 py-1 rounded-full border transition-colors \${u.verified === 1 ? 'border-red-500/50 text-red-500 hover:bg-red-500/10' : 'border-blue-500/50 text-blue-500 hover:bg-blue-500/10'}`}
+                      className={`text-xs px-3 py-1 rounded-full border transition-colors \${u.verified ? 'border-red-500/50 text-red-500 hover:bg-red-500/10' : 'border-blue-500/50 text-blue-500 hover:bg-blue-500/10'}`}
                     >
-                      {u.verified === 1 ? 'Remove Badge' : 'Give Verified Badge'}
+                      {u.verified ? 'Remove Badge' : 'Give Verified Badge'}
                     </button>
                     {u.role !== 'banned' && u.role !== 'admin' && (
                        <button onClick={() => handleBanUser(u.id)} className="text-xs px-3 py-1 rounded-full border border-red-500 text-red-500 hover:bg-red-500/10 transition-colors">
                          Ban
                        </button>
                     )}
-                    <button onClick={() => handleResetPassword(u.id)} className="text-xs px-3 py-1 rounded-full border border-[#1f1f1f] text-[#a1a1a1] hover:bg-[#1a1a1a] transition-colors">
-                      Reset Password
-                    </button>
                   </td>
                 </tr>
               ))}

@@ -1,42 +1,84 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowUp, ArrowDown, MessageSquare, ShieldCheck, Flame, Clock, TrendingUp } from 'lucide-react';
+import { ShieldCheck } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { formatDistanceToNow } from 'date-fns';
+import { db } from '../firebase';
+import { collection, query, orderBy, getDocs, where, limit, doc, updateDoc, increment } from 'firebase/firestore';
 
 export default function Home() {
   const [posts, setPosts] = useState<any[]>([]);
   const [sort, setSort] = useState('hot');
   const [tag, setTag] = useState('');
-  const { token } = useAuth();
+  const [loading, setLoading] = useState(true);
+  const { user } = useAuth();
 
-  const fetchPosts = () => {
-    let url = `/api/posts?sort=\${sort}`;
-    if (tag) url += `&tag=\${tag}`;
-    fetch(url)
-      .then(res => res.json())
-      .then(data => setPosts(data.posts || []))
-      .catch(err => {
-        console.error("Failed to fetch posts:", err);
+  const fetchPosts = async () => {
+    setLoading(true);
+    try {
+      let q;
+      const postsRef = collection(db, 'posts');
+      
+      if (tag) {
+         if (sort === 'new') {
+            q = query(postsRef, where('tagName', '==', tag), orderBy('createdAt', 'desc'), limit(50));
+         } else if (sort === 'hot') {
+            q = query(postsRef, where('tagName', '==', tag), orderBy('commentCount', 'desc'), orderBy('createdAt', 'desc'), limit(50));
+         } else {
+            q = query(postsRef, where('tagName', '==', tag), orderBy('upvotes', 'desc'), limit(50));
+         }
+      } else {
+         if (sort === 'new') {
+            q = query(postsRef, orderBy('createdAt', 'desc'), limit(50));
+         } else if (sort === 'hot') {
+            q = query(postsRef, orderBy('commentCount', 'desc'), orderBy('createdAt', 'desc'), limit(50));
+         } else {
+            q = query(postsRef, orderBy('upvotes', 'desc'), limit(50));
+         }
+      }
+
+      const querySnapshot = await getDocs(q);
+      const fetchedPosts = querySnapshot.docs.map(doc => ({ id: doc.id, ...(doc.data() as any) }));
+      setPosts(fetchedPosts);
+    } catch (err) {
+      console.error("Failed to fetch posts:", err);
+      // Fallback fallback if indexes aren't building yet
+      if (typeof err === 'object' && err !== null && 'message' in err && (err as any).message.includes('index')) {
+        console.warn("Firestore index missing, falling back to basic query");
+        const fallbackQ = query(collection(db, 'posts'), limit(50));
+         const sf = await getDocs(fallbackQ);
+         setPosts(sf.docs.map(d => ({id: d.id, ...d.data()})));
+      } else {
         setPosts([]);
-      });
+      }
+    }
+    setLoading(false);
   };
 
   useEffect(() => {
     fetchPosts();
   }, [sort, tag]);
 
-  const handleVote = async (postId: number, value: number) => {
-    if (!token) return alert('Log in to vote');
-    await fetch(`/api/posts/\${postId}/vote`, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        Authorization: `Bearer \${token}`
-      },
-      body: JSON.stringify({ value })
-    });
-    fetchPosts(); // Refresh post votes
+  const handleVote = async (postId: string, value: number) => {
+    if (!user) return alert('Log in to vote');
+    try {
+      const postRef = doc(db, 'posts', postId);
+      if (value === 1) {
+        await updateDoc(postRef, { upvotes: increment(1) });
+      } else {
+        await updateDoc(postRef, { downvotes: increment(1) });
+      }
+      // Optimistically update
+      setPosts(posts.map(p => {
+        if (p.id === postId) {
+           return { ...p, upvotes: p.upvotes + (value === 1 ? 1 : 0), downvotes: p.downvotes + (value === -1 ? 1 : 0) }
+        }
+        return p;
+      }));
+    } catch (err) {
+      console.error(err);
+      alert("Failed to vote");
+    }
   };
 
   return (
@@ -86,16 +128,16 @@ export default function Home() {
               {/* Content */}
               <div className="p-4 flex-1">
                 <div className="flex flex-wrap items-center gap-2 text-[11px] text-[#555] mb-2">
-                  {post.tag_name && (
-                    <span onClick={(e) => { e.preventDefault(); setTag(post.tag_name); }} className="text-[#a1a1a1] font-semibold hover:underline cursor-pointer">
-                      #{post.tag_name}
+                  {post.tagName && (
+                    <span onClick={(e) => { e.preventDefault(); setTag(post.tagName); }} className="text-[#a1a1a1] font-semibold hover:underline cursor-pointer">
+                      #{post.tagName}
                     </span>
                   )}
-                  {post.tag_name && <span>•</span>}
-                  <span>Posted by <span className="text-[#a1a1a1] font-medium">{post.username}</span></span>
-                  {post.verified === 1 && <ShieldCheck size={12} className="text-blue-500" />}
+                  {post.tagName && <span>•</span>}
+                  <span>Posted by <span className="text-[#a1a1a1] font-medium">{post.authorUsername || 'Deleted User'}</span></span>
+                  {post.verified && <ShieldCheck size={12} className="text-blue-500" />}
                   <span>•</span>
-                  <span>{formatDistanceToNow(new Date(post.created_at))} ago</span>
+                  <span>{post.createdAt ? formatDistanceToNow(new Date(post.createdAt)) + ' ago' : 'Recently'}</span>
                 </div>
                 
                 <Link to={`/post/\${post.id}`} className="block">
@@ -110,7 +152,7 @@ export default function Home() {
                 <div className="mt-4 flex gap-4 text-[#555] text-xs font-bold">
                   <Link to={`/post/\${post.id}`} className="flex items-center gap-1 hover:text-white transition-colors cursor-pointer">
                     <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/></svg>
-                    {post.comment_count} Comments
+                    {post.commentCount || 0} Comments
                   </Link>
                 </div>
               </div>

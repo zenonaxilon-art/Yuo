@@ -1,0 +1,120 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "User account data",
+      "type": "object",
+      "properties": {
+        "username": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "admin", "banned"] },
+        "verified": { "type": "boolean" },
+        "karma": { "type": "number" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["username", "email", "role", "verified", "karma", "createdAt"]
+    },
+    "Tag": {
+      "title": "Tag",
+      "description": "Category tag for posts",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["name", "createdAt"]
+    },
+    "Post": {
+      "title": "Post",
+      "description": "A discussion post",
+      "type": "object",
+      "properties": {
+        "authorId": { "type": "string" },
+        "authorUsername": { "type": "string" },
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "tagId": { "type": "string" },
+        "tagName": { "type": "string" },
+        "upvotes": { "type": "number" },
+        "downvotes": { "type": "number" },
+        "commentCount": { "type": "number" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["authorId", "authorUsername", "title", "upvotes", "downvotes", "commentCount", "createdAt", "updatedAt"]
+    },
+    "Comment": {
+      "title": "Comment",
+      "description": "A comment on a post",
+      "type": "object",
+      "properties": {
+        "postId": { "type": "string" },
+        "authorId": { "type": "string" },
+        "authorUsername": { "type": "string" },
+        "parentId": { "type": "string" },
+        "content": { "type": "string" },
+        "upvotes": { "type": "number" },
+        "downvotes": { "type": "number" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["postId", "authorId", "authorUsername", "content", "upvotes", "downvotes", "createdAt", "updatedAt"]
+    },
+    "Vote": {
+      "title": "Vote",
+      "description": "A user's vote on a post or comment",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "targetId": { "type": "string" },
+        "targetType": { "type": "string", "enum": ["post", "comment"] },
+        "value": { "type": "number", "enum": [1, 0, -1] },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["userId", "targetId", "targetType", "value", "createdAt"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "Alert for user activity",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "actorId": { "type": "string" },
+        "actorUsername": { "type": "string" },
+        "type": { "type": "string", "enum": ["post_reply", "comment_reply", "mention"] },
+        "postId": { "type": "string" },
+        "postTitle": { "type": "string" },
+        "commentId": { "type": "string" },
+        "isRead": { "type": "boolean" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["userId", "actorId", "actorUsername", "type", "postId", "postTitle", "isRead", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profiles. Contains public and some private data. Rules will protect private elements."
+    },
+    "/tags/{tagId}": {
+      "schema": { "$ref": "#/entities/Tag" },
+      "description": "System-wide tags for posts."
+    },
+    "/posts/{postId}": {
+      "schema": { "$ref": "#/entities/Post" },
+      "description": "All created discussion posts."
+    },
+    "/posts/{postId}/comments/{commentId}": {
+      "schema": { "$ref": "#/entities/Comment" },
+      "description": "Comments scoped to a post."
+    },
+    "/votes/{voteId}": {
+      "schema": { "$ref": "#/entities/Vote" },
+      "description": "Votes placed on posts or comments."
+    },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/Notification" },
+      "description": "User notifications."
+    }
+  }
+}

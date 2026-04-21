@@ -1,7 +1,10 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { auth, db } from './firebase';
+import { onAuthStateChanged, User as FirebaseUser, signInWithPopup, GoogleAuthProvider, signOut } from 'firebase/auth';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 
 type User = {
-  id: number;
+  id: string; // Firebase UID
   username: string;
   role: string;
   verified: boolean;
@@ -10,63 +13,74 @@ type User = {
 
 interface AuthContextType {
   user: User;
-  token: string | null;
+  firebaseUser: FirebaseUser | null;
   loading: boolean;
-  login: (user: User, token: string) => void;
-  logout: () => void;
+  loginWithGoogle: () => Promise<void>;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({
   user: null,
-  token: null,
+  firebaseUser: null,
   loading: true,
-  login: () => {},
-  logout: () => {},
+  loginWithGoogle: async () => {},
+  logout: async () => {},
 });
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<User>(null);
-  const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
+  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (token) {
-      fetch('/api/auth/me', {
-        headers: { Authorization: `Bearer \${token}` }
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (data.user) setUser(data.user);
-        else {
-          setToken(null);
-          localStorage.removeItem('token');
+    const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
+      setFirebaseUser(fbUser);
+      if (fbUser) {
+        // Fetch or create user in Firestore
+        const userRef = doc(db, 'users', fbUser.uid);
+        let userDoc = await getDoc(userRef);
+        
+        if (!userDoc.exists()) {
+          // Initialize fresh user profile
+          const newUser = {
+            username: fbUser.displayName || fbUser.email?.split('@')[0] || 'User',
+            email: fbUser.email || '',
+            role: fbUser.email === 'edredmandalunes@gmail.com' ? 'admin' : 'user',
+            verified: false,
+            karma: 0,
+            createdAt: Date.now()
+          };
+          await setDoc(userRef, newUser);
+          setUser({ id: fbUser.uid, ...newUser } as User);
+        } else {
+          const uData = userDoc.data();
+          // Retroactive admin upgrade
+          if (fbUser.email === 'edredmandalunes@gmail.com' && uData.role !== 'admin') {
+             await setDoc(userRef, { role: 'admin' }, { merge: true });
+             uData.role = 'admin';
+          }
+          setUser({ id: fbUser.uid, ...uData } as User);
         }
-      })
-      .catch(() => {
-        setToken(null);
-        localStorage.removeItem('token');
-      })
-      .finally(() => setLoading(false));
-    } else {
+      } else {
+        setUser(null);
+      }
       setLoading(false);
-    }
-  }, [token]);
+    });
 
-  const login = (userData: User, newToken: string) => {
-    setUser(userData);
-    setToken(newToken);
-    localStorage.setItem('token', newToken);
+    return unsubscribe;
+  }, []);
+
+  const loginWithGoogle = async () => {
+    const provider = new GoogleAuthProvider();
+    await signInWithPopup(auth, provider);
   };
 
-  const logout = () => {
-    setUser(null);
-    setToken(null);
-    localStorage.removeItem('token');
-    fetch('/api/auth/logout', { method: 'POST' });
+  const logout = async () => {
+    await signOut(auth);
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, firebaseUser, loading, loginWithGoogle, logout }}>
       {children}
     </AuthContext.Provider>
   );

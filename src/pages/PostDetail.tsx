@@ -3,40 +3,56 @@ import { useParams, Link } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import { ArrowUp, ArrowDown, ShieldCheck, MessageSquare, Edit2, Check, X } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
+import { db } from '../firebase';
+import { doc, getDoc, collection, query, where, orderBy, getDocs, updateDoc, increment, addDoc, writeBatch } from 'firebase/firestore';
 
 export default function PostDetail() {
   const { id } = useParams();
   const [post, setPost] = useState<any>(null);
   const [comments, setComments] = useState<any[]>([]);
   const [newComment, setNewComment] = useState('');
-  const [replyTo, setReplyTo] = useState<number | null>(null);
+  const [replyTo, setReplyTo] = useState<string | null>(null);
   
   // Edit state
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState('');
   const [editContent, setEditContent] = useState('');
 
-  const { token, user } = useAuth();
+  const { user } = useAuth();
 
-  const fetchPost = () => {
-    fetch(`/api/posts/\${id}`)
-      .then(res => res.json())
-      .then(data => {
-        if (!data.post) return;
-        setPost(data.post);
-        setEditTitle(data.post.title || '');
-        setEditContent(data.post.content || '');
-      })
-      .catch(err => {
-         console.error("Failed to fetch post:", err);
-      });
+  const fetchPost = async () => {
+    if (!id) return;
+    try {
+      const docRef = doc(db, 'posts', id);
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        const data = { id: docSnap.id, ...docSnap.data() } as any;
+        setPost(data);
+        setEditTitle(data.title || '');
+        setEditContent(data.content || '');
+      }
+    } catch (err) {
+      console.error("Failed to fetch post:", err);
+    }
   };
 
-  const fetchComments = () => {
-    fetch(`/api/posts/\${id}/comments`)
-      .then(res => res.json())
-      .then(data => setComments(data.comments || []))
-      .catch(err => console.error("Failed to fetch comments", err));
+  const fetchComments = async () => {
+    if (!id) return;
+    try {
+      const q = query(collection(db, 'comments'), where('postId', '==', id), orderBy('createdAt', 'asc'));
+      const qSnap = await getDocs(q);
+      setComments(qSnap.docs.map(d => ({id: d.id, ...d.data()})));
+    } catch (err) {
+      // index fallback
+      try {
+         const fbSnap = await getDocs(query(collection(db, 'comments'), where('postId', '==', id)));
+         const fbComments = fbSnap.docs.map(d => ({id: d.id, ...d.data()})) as any[];
+         fbComments.sort((a,b) => a.createdAt - b.createdAt);
+         setComments(fbComments);
+      } catch (e) {
+          console.error("Failed to fetch comments", err);
+      }
+    }
   };
 
   useEffect(() => {
@@ -44,65 +60,106 @@ export default function PostDetail() {
     fetchComments();
   }, [id]);
 
-  const handleVote = async (targetId: number, type: 'post' | 'comment', value: number) => {
-    if (!token) return alert('Log in to vote');
-    await fetch(`/api/\${type}s/\${targetId}/vote`, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        Authorization: `Bearer \${token}`
-      },
-      body: JSON.stringify({ value })
-    });
-    if (type === 'post') fetchPost();
-    else fetchComments();
+  const handleVote = async (targetId: string, type: 'post' | 'comment', value: number) => {
+    if (!user) return alert('Log in to vote');
+    try {
+      const targetRef = doc(db, type === 'post' ? 'posts' : 'comments', targetId);
+      if (value === 1) {
+        await updateDoc(targetRef, { upvotes: increment(1) });
+      } else {
+        await updateDoc(targetRef, { downvotes: increment(1) });
+      }
+      if (type === 'post') fetchPost();
+      else fetchComments();
+    } catch (e) {
+       console.error(e);
+       alert("Failed to vote");
+    }
   };
 
   const handleComment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!token) return alert('Log in to comment');
-    if (!newComment.trim()) return;
+    if (!user) return alert('Log in to comment');
+    if (!newComment.trim() || !id) return;
 
-    await fetch(`/api/posts/\${id}/comments`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer \${token}`
-      },
-      body: JSON.stringify({ content: newComment, parentId: replyTo })
-    });
+    try {
+      const nComment = {
+         postId: id,
+         authorId: user.id,
+         authorUsername: user.username,
+         parentId: replyTo || null,
+         content: newComment,
+         upvotes: 0,
+         downvotes: 0,
+         createdAt: Date.now(),
+         updatedAt: Date.now()
+      };
+      const commentRef = await addDoc(collection(db, 'comments'), nComment);
+      
+      // Update comment count
+      await updateDoc(doc(db, 'posts', id), { commentCount: increment(1) });
 
-    setNewComment('');
-    setReplyTo(null);
-    fetchComments();
+      // Notifications
+      let targetUserId = null;
+      let notifType = '';
+      if (replyTo) {
+          const parentC = comments.find(c => c.id === replyTo);
+          if (parentC && parentC.authorId !== user.id) {
+             targetUserId = parentC.authorId;
+             notifType = 'comment_reply';
+          }
+      } else {
+          if (post && post.authorId !== user.id) {
+             targetUserId = post.authorId;
+             notifType = 'post_reply';
+          }
+      }
+
+      const batch = writeBatch(db);
+      if (targetUserId) {
+          const nRef = doc(collection(db, 'notifications'));
+          batch.set(nRef, {
+              userId: targetUserId,
+              actorId: user.id,
+              actorUsername: user.username,
+              type: notifType,
+              postId: id,
+              postTitle: post.title.substring(0, 50),
+              commentId: commentRef.id,
+              isRead: false,
+              createdAt: Date.now()
+          });
+      }
+
+      await batch.commit();
+
+      setNewComment('');
+      setReplyTo(null);
+      fetchComments();
+      fetchPost();
+    } catch (e) {
+       console.error("Failed to post comment", e);
+    }
   };
 
   const handleSaveEdit = async () => {
-    if (!editTitle.trim()) return;
+    if (!editTitle.trim() || !id) return;
     
-    const res = await fetch(`/api/posts/\${id}`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer \${token}`
-      },
-      body: JSON.stringify({ title: editTitle, content: editContent })
-    });
-
-    if (res.ok) {
+    try {
+      await updateDoc(doc(db, 'posts', id), { title: editTitle, content: editContent, updatedAt: Date.now() });
       setIsEditing(false);
       fetchPost();
-    } else {
-      const data = await res.json();
-      alert(data.error || "Failed to update post");
+    } catch (e) {
+      console.error(e);
+      alert("Failed to update post");
     }
   };
 
   if (!post) return <div className="p-8 text-center text-gray-500">Loading...</div>;
 
   // Group comments by parent
-  const rootComments = comments.filter(c => !c.parent_id);
-  const replies = comments.filter(c => c.parent_id);
+  const rootComments = comments.filter(c => !c.parentId);
+  const replies = comments.filter(c => c.parentId);
 
   const CommentList = ({ list }: { list: any[] }) => {
     return list.map(comment => (
@@ -117,10 +174,10 @@ export default function PostDetail() {
         </div>
         <div className="flex-1">
           <div className="text-xs text-[#555] mb-1 flex items-center gap-1">
-            <span className="font-medium text-[#a1a1a1]">{comment.username}</span>
-            {comment.verified === 1 && <ShieldCheck size={12} className="text-blue-500" />}
+            <span className="font-medium text-[#a1a1a1]">{comment.authorUsername || 'Deleted User'}</span>
+            {comment.verified && <ShieldCheck size={12} className="text-blue-500" />}
             <span className="mx-1">•</span>
-            {formatDistanceToNow(new Date(comment.created_at))} ago
+            {comment.createdAt ? formatDistanceToNow(new Date(comment.createdAt)) + ' ago' : 'Recently'}
             <span className="mx-1">•</span>
             <span className="font-bold text-[#a1a1a1]">
               {comment.upvotes - comment.downvotes} points
@@ -149,7 +206,7 @@ export default function PostDetail() {
 
           {/* Render nested replies */}
           <div className="ml-4 pl-4 border-l-2 border-[#1f1f1f] mt-4">
-             <CommentList list={replies.filter(r => r.parent_id === comment.id)} />
+             <CommentList list={replies.filter(r => r.parentId === comment.id)} />
           </div>
         </div>
       </div>
@@ -175,14 +232,14 @@ export default function PostDetail() {
         {/* Content */}
         <div className="p-4 sm:p-6 flex-1 bg-[#141414]">
           <div className="flex flex-wrap items-center gap-2 text-[11px] text-[#555] mb-2">
-            {post.tag_name && <span className="text-[#a1a1a1] font-semibold">#{post.tag_name}</span>}
-            {post.tag_name && <span>•</span>}
-            <span>Posted by <span className="text-[#a1a1a1] font-medium">{post.username}</span></span>
-            {post.verified === 1 && <ShieldCheck size={12} className="text-blue-500" />}
+            {post.tagName && <span className="text-[#a1a1a1] font-semibold">#{post.tagName}</span>}
+            {post.tagName && <span>•</span>}
+            <span>Posted by <span className="text-[#a1a1a1] font-medium">{post.authorUsername || 'Deleted User'}</span></span>
+            {post.verified && <ShieldCheck size={12} className="text-blue-500" />}
             <span>•</span>
-            <span>{formatDistanceToNow(new Date(post.created_at))} ago</span>
+            <span>{post.createdAt ? formatDistanceToNow(new Date(post.createdAt)) + ' ago' : 'Recently'}</span>
             
-            {user && user.username === post.username && !isEditing && (
+            {user && user.id === post.authorId && !isEditing && (
               <>
                 <span>•</span>
                 <button onClick={() => setIsEditing(true)} className="flex items-center gap-1 text-[#a1a1a1] hover:text-white transition-colors">

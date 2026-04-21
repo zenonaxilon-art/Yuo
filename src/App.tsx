@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter, Routes, Route, Link, useNavigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './AuthContext';
 import Home from './pages/Home';
@@ -8,7 +8,8 @@ import AdminDashboard from './pages/AdminDashboard';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import { LogOut, Plus, Shield, User, Moon, Sun, Home as HomeIcon, Bell } from 'lucide-react';
-import { useState, useEffect, useRef } from 'react';
+import { auth, db } from './firebase';
+import { collection, query, where, onSnapshot, writeBatch, doc } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'motion/react';
 
 function Navigation() {
@@ -73,29 +74,31 @@ function Navigation() {
 }
 
 function Header() {
-  const { user, token } = useAuth();
+  const { user } = useAuth();
   const [notifications, setNotifications] = useState<any[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [showNotifications, setShowNotifications] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (user && token) {
-      fetch('/api/notifications', {
-        headers: { Authorization: `Bearer \${token}` }
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (data.notifications) {
-          setNotifications(data.notifications || []);
-          setUnreadCount((data.notifications || []).filter((n: any) => n.is_read === 0).length);
-        }
-      })
-      .catch(err => {
-        console.error("Failed to fetch notifications:", err);
+    if (user && user.id) {
+      const q = query(
+        collection(db, 'notifications'),
+        where('userId', '==', user.id)
+      );
+
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        const notifs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
+        notifs.sort((a, b) => b.createdAt - a.createdAt); // Temporary client-side sort
+        setNotifications(notifs);
+        setUnreadCount(notifs.filter((n: any) => !n.isRead).length);
+      }, (error) => {
+        console.error("Failed to fetch notifications:", error);
       });
+
+      return () => unsubscribe();
     }
-  }, [user, token]);
+  }, [user]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -108,23 +111,30 @@ function Header() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const handleOpenNotifications = () => {
+  const handleOpenNotifications = async () => {
     setShowNotifications(!showNotifications);
     if (!showNotifications && unreadCount > 0) {
-      fetch('/api/notifications/read', {
-        method: 'POST',
-        headers: { Authorization: `Bearer \${token}` }
-      });
-      setUnreadCount(0);
-      setNotifications(prev => prev.map(n => ({...n, is_read: 1})));
+      const unreadNotifs = notifications.filter(n => !n.isRead);
+      if (unreadNotifs.length > 0) {
+         try {
+           const batch = writeBatch(db);
+           unreadNotifs.forEach(n => {
+             const nRef = doc(db, 'notifications', n.id);
+             batch.update(nRef, { isRead: true });
+           });
+           await batch.commit();
+         } catch (e) {
+            console.error(e);
+         }
+      }
     }
   };
 
   const getNotificationText = (n: any) => {
-    if (n.type === 'post_reply') return `\${n.actor_username} replied to your post`;
-    if (n.type === 'comment_reply') return `\${n.actor_username} replied to your comment`;
-    if (n.type === 'mention') return `\${n.actor_username} mentioned you`;
-    return `New activity from \${n.actor_username}`;
+    if (n.type === 'post_reply') return `\${n.actorUsername} replied to your post`;
+    if (n.type === 'comment_reply') return `\${n.actorUsername} replied to your comment`;
+    if (n.type === 'mention') return `\${n.actorUsername} mentioned you`;
+    return `New activity from \${n.actorUsername}`;
   };
   
   return (
@@ -191,7 +201,7 @@ function Header() {
               <div className="text-right">
                 <div className="flex items-center justify-end gap-1 font-semibold text-sm">
                   {user.username}
-                  {user.verified === 1 && (
+                  {user.verified && (
                     <svg className="w-3 h-3 text-blue-400" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M6.267 3.455a3.066 3.066 0 001.745-.723 3.066 3.066 0 013.976 0 3.066 3.066 0 001.745.723 3.066 3.066 0 012.812 2.812c.051.643.304 1.254.723 1.745a3.066 3.066 0 010 3.976 3.066 3.066 0 00-.723 1.745 3.066 3.066 0 01-2.812 2.812 3.066 3.066 0 00-1.745.723 3.066 3.066 0 01-3.976 0 3.066 3.066 0 00-1.745-.723 3.066 3.066 0 01-2.812-2.812 3.066 3.066 0 00-.723-1.745 3.066 3.066 0 010-3.976 3.066 3.066 0 00.723-1.745 3.066 3.066 0 012.812-2.812zm7.44 5.252a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd"/></svg>
                   )}
                 </div>

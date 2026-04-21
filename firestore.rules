@@ -1,0 +1,183 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Primitive Helpers
+    function isSignedIn() { return request.auth != null && request.auth.token.email_verified == true; }
+    function isUnverifiedSignedIn() { return request.auth != null; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isAdmin() { return isUnverifiedSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'; }
+
+    // Validation Blueprints
+    function isValidUser(data) {
+      return data.keys().hasAll(['username', 'email', 'role', 'verified', 'karma', 'createdAt']) &&
+             data.username is string && data.username.size() >= 3 && data.username.size() <= 30 &&
+             data.email is string && data.email.size() <= 100 &&
+             data.role is string && data.role in ['user', 'admin', 'banned'] &&
+             data.verified is bool &&
+             data.karma is number &&
+             data.createdAt is number;
+    }
+
+    function isValidTag(data) {
+      return data.keys().hasAll(['name', 'createdAt']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 50 &&
+             data.createdAt is number;
+    }
+
+    function isValidPost(data) {
+      // tagId, tagName, content can be optional, meaning we check hasAll on required keys
+      return data.keys().hasAll(['authorId', 'authorUsername', 'title', 'upvotes', 'downvotes', 'commentCount', 'createdAt', 'updatedAt']) &&
+             data.authorId is string && data.authorId == request.auth.uid &&
+             data.authorUsername is string && data.authorUsername.size() <= 30 &&
+             data.title is string && data.title.size() > 0 && data.title.size() <= 300 &&
+             data.upvotes is number && data.downvotes is number && data.commentCount is number &&
+             data.createdAt is number && data.updatedAt is number;
+    }
+
+    function isValidComment(data) {
+      return data.keys().hasAll(['postId', 'authorId', 'authorUsername', 'content', 'upvotes', 'downvotes', 'createdAt', 'updatedAt']) &&
+             data.postId is string &&
+             data.authorId is string && data.authorId == request.auth.uid &&
+             data.authorUsername is string && data.authorUsername.size() <= 30 &&
+             data.content is string && data.content.size() > 0 && data.content.size() <= 1000 &&
+             data.upvotes is number && data.downvotes is number &&
+             data.createdAt is number && data.updatedAt is number;
+    }
+
+    function isValidVote(data) {
+      return data.keys().hasAll(['userId', 'targetId', 'targetType', 'value', 'createdAt']) &&
+             data.userId is string && data.userId == request.auth.uid &&
+             data.targetId is string &&
+             data.targetType is string && data.targetType in ['post', 'comment'] &&
+             data.value is number && (data.value == 1 || data.value == 0 || data.value == -1) &&
+             data.createdAt is number;
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll(['userId', 'actorId', 'actorUsername', 'type', 'postId', 'postTitle', 'isRead', 'createdAt']) &&
+             data.userId is string &&
+             data.actorId is string && data.actorId == request.auth.uid && // Caller is the actor
+             data.actorUsername is string && data.actorUsername.size() <= 30 &&
+             data.type is string && data.type in ['post_reply', 'comment_reply', 'mention'] &&
+             data.postId is string &&
+             data.postTitle is string && data.postTitle.size() <= 300 &&
+             data.isRead is bool &&
+             data.createdAt is number;
+    }
+
+    match /users/{userId} {
+      allow read: if isUnverifiedSignedIn(); // all signed-in users can read profiles
+      allow create: if isUnverifiedSignedIn() && 
+                    request.auth.uid == userId && 
+                    isValidUser(incoming()) && 
+                    (incoming().role == 'user' || (incoming().role == 'admin' && request.auth.token.email == 'edredmandalunes@gmail.com')) && 
+                    incoming().karma == 0 &&
+                    incoming().verified == false &&
+                    incoming().createdAt == request.time.toMillis();
+      
+      allow update: if isUnverifiedSignedIn() && isValidId(userId) && (
+        isAdmin() ||
+        (
+          request.auth.uid == userId && 
+          isValidUser(incoming()) &&
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['username']) ||
+            (incoming().diff(existing()).affectedKeys().hasOnly(['role']) && incoming().role == 'admin' && request.auth.token.email == 'edredmandalunes@gmail.com')
+          )
+        )
+      );
+    }
+
+    match /tags/{tagId} {
+      allow read: if true;
+      allow create: if isAdmin() && isValidTag(incoming()) && incoming().createdAt == request.time.toMillis();
+      allow update, delete: if isAdmin();
+    }
+
+    match /posts/{postId} {
+      allow read: if true;
+      allow create: if isUnverifiedSignedIn() && 
+                    isValidPost(incoming()) && 
+                    incoming().upvotes == 0 && 
+                    incoming().downvotes == 0 && 
+                    incoming().commentCount == 0 &&
+                    incoming().createdAt == request.time.toMillis() &&
+                    incoming().updatedAt == request.time.toMillis();
+      
+      allow update: if isUnverifiedSignedIn() && isValidId(postId) && (
+        isAdmin() ||
+        (
+          request.auth.uid == existing().authorId &&
+          isValidPost(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'content', 'tagId', 'tagName', 'updatedAt']) &&
+          incoming().updatedAt == request.time.toMillis()
+        ) ||
+        (
+          // Allow voting increments and comment count increments by anyone
+          isValidPost(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['upvotes', 'downvotes', 'commentCount', 'updatedAt'])
+        )
+      );
+      allow delete: if isAdmin();
+    }
+
+    match /posts/{postId}/comments/{commentId} {
+      allow read: if true;
+      allow create: if isUnverifiedSignedIn() && 
+                    isValidComment(incoming()) && 
+                    incoming().postId == postId &&
+                    incoming().upvotes == 0 && 
+                    incoming().downvotes == 0 &&
+                    incoming().createdAt == request.time.toMillis() &&
+                    incoming().updatedAt == request.time.toMillis();
+      
+      allow update: if isUnverifiedSignedIn() && isValidId(postId) && isValidId(commentId) && (
+        isAdmin() ||
+        (
+          request.auth.uid == existing().authorId &&
+          isValidComment(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['content', 'updatedAt']) &&
+          incoming().updatedAt == request.time.toMillis()
+        ) ||
+        (
+          // allowing upvote/downvote updates
+          isValidComment(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['upvotes', 'downvotes', 'updatedAt'])
+        )
+      );
+      allow delete: if isAdmin();
+    }
+
+    match /votes/{voteId} {
+      allow read: if isUnverifiedSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isUnverifiedSignedIn() && 
+                    isValidVote(incoming()) && 
+                    incoming().createdAt == request.time.toMillis();
+      allow update: if isUnverifiedSignedIn() && isValidId(voteId) && (
+        request.auth.uid == existing().userId &&
+        isValidVote(incoming()) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['value'])
+      );
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if isUnverifiedSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isUnverifiedSignedIn() && 
+                    isValidNotification(incoming()) && 
+                    incoming().isRead == false &&
+                    incoming().createdAt == request.time.toMillis();
+      allow update: if isUnverifiedSignedIn() && isValidId(notificationId) && (
+        request.auth.uid == existing().userId &&
+        isValidNotification(incoming()) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['isRead'])
+      );
+    }
+  }
+}

@@ -1,48 +1,98 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
+import { db } from '../firebase';
+import { collection, addDoc, getDocs, query, orderBy, writeBatch, doc } from 'firebase/firestore';
 
 export default function CreatePost() {
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [tagId, setTagId] = useState('');
   const [tags, setTags] = useState<any[]>([]);
-  const { token, user } = useAuth();
+  const { user } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (user === null && token === null) {
+    if (!user) {
         navigate('/login');
     }
-  }, [user, token, navigate]);
+  }, [user, navigate]);
 
   useEffect(() => {
-    fetch('/api/tags')
-      .then(res => res.json())
-      .then(data => setTags(data.tags));
+    const fetchTags = async () => {
+       const tagsSnapshot = await getDocs(query(collection(db, 'tags'), orderBy('createdAt', 'desc')));
+       setTags(tagsSnapshot.docs.map(d => ({id: d.id, ...d.data()})));
+    };
+    fetchTags();
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!token) return;
+    if (!user) return;
 
-    const res = await fetch('/api/posts', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer \${token}`
-      },
-      body: JSON.stringify({ 
-        title, 
-        content, 
-        tagId: tagId ? parseInt(tagId) : null 
-      })
-    });
+    try {
+      const selectedTag = tags.find(t => t.id === tagId);
+      
+      const newPost = {
+        authorId: user.id,
+        authorUsername: user.username,
+        title,
+        content: content || null,
+        tagId: tagId || null,
+        tagName: selectedTag ? selectedTag.name : null,
+        upvotes: 0,
+        downvotes: 0,
+        commentCount: 0,
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      };
 
-    if (res.ok) {
-      const data = await res.json();
-      navigate(`/post/\${data.id}`);
-    } else {
+      const docRef = await addDoc(collection(db, 'posts'), newPost);
+
+      // Handle mentions
+      if (content) {
+        const mentionRegex = /@([a-zA-Z0-9_]+)/g;
+        let match;
+        const mentionedUsernames = new Set<string>();
+        while ((match = mentionRegex.exec(content)) !== null) {
+          mentionedUsernames.add(match[1]);
+        }
+
+        if (mentionedUsernames.size > 0) {
+          // Simplification: We need to find users by username. This can be slow without a cloud function or index,
+          // but we'll do it for demonstration if the users collection is small or indexed.
+          // Note: In real app, build a lowercase username field for querying.
+          const usersSnapshot = await getDocs(collection(db, 'users'));
+          const batch = writeBatch(db);
+          let createdNotifications = false;
+
+          usersSnapshot.forEach(userDoc => {
+             const userData = userDoc.data();
+             if (mentionedUsernames.has(userData.username) && userDoc.id !== user.id) {
+                 const notifRef = doc(collection(db, 'notifications'));
+                 batch.set(notifRef, {
+                    userId: userDoc.id,
+                    actorId: user.id,
+                    actorUsername: user.username,
+                    type: 'mention',
+                    postId: docRef.id,
+                    postTitle: title.substring(0, 50),
+                    isRead: false,
+                    createdAt: Date.now()
+                 });
+                 createdNotifications = true;
+             }
+          });
+
+          if (createdNotifications) {
+             await batch.commit();
+          }
+        }
+      }
+
+      navigate(`/post/\${docRef.id}`);
+    } catch (err) {
+      console.error(err);
       alert('Error creating post');
     }
   };
